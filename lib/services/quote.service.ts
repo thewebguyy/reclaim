@@ -2,6 +2,7 @@ import { Quote, ContactSource } from "@prisma/client";
 import prisma from "../prisma";
 import { ContactService } from "./contact.service";
 import { ParsedQuote } from "../schemas/quote.schema";
+import { SequenceService } from "./sequence.service";
 
 export class QuoteService {
   static async ingest(organisationId: string, parsed: ParsedQuote): Promise<Quote> {
