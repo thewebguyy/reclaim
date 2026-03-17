@@ -1,0 +1,379 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = "postgresql://postgres:postgres@localhost:5432/reclaim?schema=public"
+}
+
+enum Industry {
+  hvac
+  plumbing
+  cleaning
+  landscaping
+  pest_control
+  other
+}
+
+enum Plan {
+  trial
+  starter
+  growth
+  pro
+}
+
+enum ContactSource {
+  jobber
+  housecall_pro
+  csv
+  manual
+}
+
+enum QuoteStatus {
+  pending
+  sequence_running
+  engaged
+  converted
+  expired
+  excluded
+  dnc
+}
+
+enum MessageDirection {
+  outbound
+  inbound
+}
+
+enum MessageChannel {
+  sms
+  email
+}
+
+enum MessageStatus {
+  queued
+  sent
+  delivered
+  opened
+  failed
+  received
+}
+
+enum ThreadStatus {
+  open
+  resolved
+}
+
+enum SubscriptionStatus {
+  trialing
+  active
+  past_due
+  canceled
+  unpaid
+}
+
+enum Role {
+  admin
+  agent
+}
+
+model Organisation {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clerkOrgId    String    @unique
+  slug          String    @unique
+  name          String
+  industry      Industry
+  twilioNumber  String?
+  replyEmail    String?
+  reviewUrl     String?
+  timezone      String    @default("UTC")
+  plan          Plan      @default(trial)
+  trialEndsAt   DateTime?
+  settings      Json      @default("{}")
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  deletedAt     DateTime?
+
+  members       OrganisationMember[]
+  contacts      Contact[]
+  quotes        Quote[]
+  sequences     Sequence[]
+  messages      Message[]
+  inboxThreads  InboxThread[]
+  jobs          Job[]
+  reviews       Review[]
+  subscriptions Subscription[]
+  sequenceSteps SequenceStep[]
+
+  @@map("organisations")
+}
+
+model User {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clerkUserId String    @unique
+  email       String    @unique
+  fullName    String?
+  avatarUrl   String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  memberships       OrganisationMember[]
+  assignedThreads   InboxThread[]
+  invitedMembers    OrganisationMember[] @relation("invitedBy")
+
+  @@map("users")
+}
+
+model OrganisationMember {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organisationId String    @db.Uuid
+  userId         String    @db.Uuid
+  role           Role      @default(agent)
+  invitedById    String?   @db.Uuid
+  joinedAt       DateTime?
+  createdAt      DateTime  @default(now())
+
+  organisation   Organisation @relation(fields: [organisationId], references: [id])
+  user           User         @relation(fields: [userId], references: [id])
+  invitedBy      User?        @relation("invitedBy", fields: [invitedById], references: [id])
+
+  @@unique([organisationId, userId])
+  @@index([organisationId])
+  @@index([userId])
+  @@map("organisation_members")
+}
+
+model Contact {
+  id             String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organisationId String        @db.Uuid
+  firstName      String?
+  lastName       String?
+  companyName    String?
+  phoneEnc       String?
+  phoneHash      String?
+  emailEnc       String?
+  emailHash      String?
+  optOutSms      Boolean       @default(false)
+  optOutEmail    Boolean       @default(false)
+  externalId     String?
+  externalSource ContactSource?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  deletedAt      DateTime?
+
+  organisation   Organisation  @relation(fields: [organisationId], references: [id])
+  quotes         Quote[]
+  messages       Message[]
+  inboxThreads   InboxThread[]
+  jobs           Job[]
+  reviews        Review[]
+
+  @@unique([organisationId, phoneHash])
+  @@unique([organisationId, emailHash])
+  @@unique([organisationId, externalId, externalSource])
+  @@index([organisationId])
+  @@map("contacts")
+}
+
+model Quote {
+  id                  String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organisationId      String       @db.Uuid
+  contactId           String       @db.Uuid
+  sequenceId          String?      @db.Uuid
+  externalId          String?
+  externalSource      ContactSource?
+  title               String?
+  amount              Decimal?     @db.Decimal(12, 2)
+  currency            String       @default("USD") @db.Char(3)
+  status              QuoteStatus  @default(pending)
+  sentAt              DateTime
+  sequenceStepCursor  Int          @default(0)
+  sequenceEnrolledAt  DateTime?
+  sequencePausedAt    DateTime?
+  sequenceCompletedAt DateTime?
+  convertedAt         DateTime?
+  recoveryAttributed  Boolean      @default(false)
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  organisation        Organisation @relation(fields: [organisationId], references: [id])
+  contact             Contact      @relation(fields: [contactId], references: [id])
+  sequence            Sequence?    @relation(fields: [sequenceId], references: [id])
+  messages            Message[]
+  inboxThreads        InboxThread[]
+  jobs                Job[]
+
+  @@unique([organisationId, externalId, externalSource])
+  @@index([organisationId, status])
+  @@index([organisationId, convertedAt])
+  @@map("quotes")
+}
+
+model Sequence {
+  id                String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organisationId    String       @db.Uuid
+  name              String
+  triggerAfterHours Int          @default(48)
+  isDefault         Boolean      @default(false)
+  isActive          Boolean      @default(true)
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  organisation      Organisation @relation(fields: [organisationId], references: [id])
+  steps             SequenceStep[]
+  quotes            Quote[]
+
+  @@index([organisationId])
+  @@map("sequences")
+}
+
+model SequenceStep {
+  id                   String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sequenceId           String       @db.Uuid
+  organisationId       String       @db.Uuid
+  stepNumber           Int
+  delayHours           Int
+  channelSms           Boolean      @default(true)
+  channelEmail         Boolean      @default(false)
+  smsTemplate          String?
+  emailSubjectTemplate String?
+  emailBodyTemplate    String?
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
+
+  sequence             Sequence     @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
+  organisation         Organisation @relation(fields: [organisationId], references: [id])
+
+  @@unique([sequenceId, stepNumber])
+  @@map("sequence_steps")
+}
+
+model Message {
+  id               String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organisationId   String           @db.Uuid
+  contactId        String           @db.Uuid
+  threadId         String?          @db.Uuid
+  quoteId          String?          @db.Uuid
+  jobId            String?          @db.Uuid
+  direction        MessageDirection
+  channel          MessageChannel
+  body             String?
+  emailSubject     String?
+  emailHtml        String?
+  status           MessageStatus
+  providerId       String?
+  sequenceStepNo   Int?
+  errorCode        String?
+  sentAt           DateTime?
+  deliveredAt      DateTime?
+  openedAt         DateTime?
+  receivedAt       DateTime?
+  rawPayload       Json?
+  createdAt        DateTime         @default(now())
+
+  organisation     Organisation     @relation(fields: [organisationId], references: [id])
+  contact          Contact          @relation(fields: [contactId], references: [id])
+  thread           InboxThread?     @relation(fields: [threadId], references: [id])
+  quote            Quote?           @relation(fields: [quoteId], references: [id])
+  job              Job?             @relation(fields: [jobId], references: [id])
+
+  @@index([organisationId, contactId])
+  @@index([providerId])
+  @@index([quoteId, sequenceStepNo])
+  @@map("messages")
+}
+
+model InboxThread {
+  id             String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organisationId String       @db.Uuid
+  contactId      String       @db.Uuid
+  quoteId        String?      @db.Uuid
+  jobId          String?      @db.Uuid
+  status         ThreadStatus @default(open)
+  assignedToId   String?      @db.Uuid
+  unreadCount    Int          @default(0)
+  lastMessageAt  DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organisation   Organisation @relation(fields: [organisationId], references: [id])
+  contact        Contact      @relation(fields: [contactId], references: [id])
+  quote          Quote?       @relation(fields: [quoteId], references: [id])
+  job            Job?         @relation(fields: [jobId], references: [id])
+  assignedTo     User?        @relation(fields: [assignedToId], references: [id])
+  messages       Message[]
+
+  @@index([organisationId, status, lastMessageAt(sort: Desc)])
+  @@index([organisationId])
+  @@map("inbox_threads")
+}
+
+model Job {
+  id                   String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organisationId       String       @db.Uuid
+  contactId            String       @db.Uuid
+  quoteId              String?      @db.Uuid
+  externalId           String?
+  externalSource       ContactSource?
+  title                String?
+  completedAt          DateTime
+  reviewRequestSentAt  DateTime?
+  rebookingDueAt       DateTime?
+  rebookingSentAt      DateTime?
+  createdAt            DateTime     @default(now())
+
+  organisation         Organisation @relation(fields: [organisationId], references: [id])
+  contact              Contact      @relation(fields: [contactId], references: [id])
+  quote                Quote?       @relation(fields: [quoteId], references: [id])
+  messages             Message[]
+  inboxThreads         InboxThread[]
+  reviews              Review[]
+
+  @@unique([organisationId, externalId, externalSource])
+  @@index([organisationId, rebookingDueAt])
+  @@map("jobs")
+}
+
+model Review {
+  id             String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organisationId String         @db.Uuid
+  jobId          String         @db.Uuid
+  contactId      String         @db.Uuid
+  messageId      String?        @db.Uuid
+  channel        MessageChannel
+  sentAt         DateTime?
+  clickedAt      DateTime?
+  reviewUrlUsed  String?
+  createdAt      DateTime       @default(now())
+
+  organisation   Organisation   @relation(fields: [organisationId], references: [id])
+  job            Job            @relation(fields: [jobId], references: [id])
+  contact        Contact        @relation(fields: [contactId], references: [id])
+
+  @@unique([jobId])
+  @@index([organisationId])
+  @@map("reviews")
+}
+
+model Subscription {
+  id                   String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organisationId       String             @db.Uuid
+  stripeSubscriptionId String             @unique
+  stripeCustomerId     String?
+  stripePriceId        String
+  plan                 Plan
+  status               SubscriptionStatus
+  currentPeriodStart   DateTime
+  currentPeriodEnd     DateTime
+  cancelAtPeriodEnd    Boolean            @default(false)
+  canceledAt           DateTime?
+  trialEnd             DateTime?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  organisation         Organisation       @relation(fields: [organisationId], references: [id])
+
+  @@index([organisationId])
+  @@map("subscriptions")
+}
